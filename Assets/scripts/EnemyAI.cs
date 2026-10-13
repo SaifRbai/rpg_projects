@@ -1,25 +1,37 @@
 using UnityEngine;
 
 /// <summary>
-/// IA du squelette : poursuit le joueur quand il est assez proche, s'arrete
-/// devant les murs et inflige des degats au contact.
+/// IA des ennemis (squelettes, gobelins) : poursuit le joueur quand il est assez
+/// proche, s'arrete devant les murs et frappe quand le joueur est a portee.
+///
+/// Tout se mesure aux PIEDS : le collider du joueur ne couvre que ses pieds alors que
+/// son pivot est au milieu du sprite. En visant le pivot, l'ennemi s'arretait a cote
+/// du torse du joueur, sans jamais toucher son collider -> il ne frappait jamais.
 /// </summary>
 public class EnemyAI : MonoBehaviour
 {
     [Header("Deplacement")]
     public float moveSpeed = 2f;
     public float detectionRange = 8f; // au-dela, le squelette ne bouge pas
-    public float stopDistance = 0.8f; // en deca, il s'arrete pour ne pas "rentrer" dans le joueur
+    public float stopDistance = 0.8f; // repli si l'ennemi ou le joueur n'a pas de collider
     public LayerMask wallLayer;
 
     [Header("Combat")]
     public int touchDamage = 1;
+    [Tooltip("Ecart max entre les colliders (pieds) pour frapper ; l'ennemi s'arrete a cette distance")]
+    public float attackReach = 0.3f;
     public float damageCooldown = 1f; // temps minimum entre deux degats de contact
 
     [Header("Visuel")]
     public bool spriteFacesLeft = true; // a inverser si le squelette regarde du mauvais cote
 
+    [Tooltip("Etats de l'Animator pendant lesquels l'ennemi ne bouge ni ne se retourne (attaque, mort)")]
+    public string[] busyStates = { "Skeleton_Attack", "Skeleton_Attack_2", "Skeleton_Dying" };
+
     private Transform player;
+    private Collider2D playerFeet;
+    private PlayerStats playerStats;
+    private Collider2D feet;
     private Rigidbody2D rb;
     private Animator animator;
     private Vector2 moveDirection;
@@ -29,6 +41,7 @@ public class EnemyAI : MonoBehaviour
     {
         rb = GetComponent<Rigidbody2D>();
         animator = GetComponent<Animator>();
+        feet = GetComponent<Collider2D>();
 
         // Kinematic : le squelette ne se fait pas pousser, on le deplace nous-memes
         if (rb != null)
@@ -39,7 +52,12 @@ public class EnemyAI : MonoBehaviour
         }
 
         GameObject playerObj = GameObject.FindGameObjectWithTag("Player");
-        if (playerObj != null) player = playerObj.transform;
+        if (playerObj != null)
+        {
+            player = playerObj.transform;
+            playerFeet = playerObj.GetComponent<Collider2D>();
+            playerStats = playerObj.GetComponent<PlayerStats>();
+        }
     }
 
     /// <summary>Vrai pendant l'attaque ou la mort : le squelette ne bouge ni ne se retourne.</summary>
@@ -47,23 +65,33 @@ public class EnemyAI : MonoBehaviour
     {
         if (animator == null) return false;
         AnimatorStateInfo state = animator.GetCurrentAnimatorStateInfo(0);
-        return state.IsName("Skeleton_Attack")
-            || state.IsName("Skeleton_Attack_2")
-            || state.IsName("Skeleton_Dying");
+        foreach (string busy in busyStates)
+            if (state.IsName(busy)) return true;
+        return false;
     }
 
     void Update()
     {
         if (player == null || rb == null) return;
 
-        Vector2 toPlayer = player.position - transform.position;
+        Vector2 toPlayer = PlayerFeetPos() - FeetPos();
         float distance = toPlayer.magnitude;
 
-        moveDirection = (distance <= detectionRange && distance > stopDistance)
-            ? toPlayer.normalized
-            : Vector2.zero;
+        bool inReach = InReach(distance);
+        moveDirection = (distance <= detectionRange && !inReach) ? toPlayer.normalized : Vector2.zero;
 
         if (!IsBusy()) FacePlayer();
+        if (inReach) TryAttack();
+    }
+
+    Vector2 FeetPos() { return feet != null ? (Vector2)feet.bounds.center : (Vector2)transform.position; }
+    Vector2 PlayerFeetPos() { return playerFeet != null ? (Vector2)playerFeet.bounds.center : (Vector2)player.position; }
+
+    // ecart reel entre les deux colliders (negatif s'ils se chevauchent)
+    bool InReach(float feetDistance)
+    {
+        if (feet == null || playerFeet == null || !feet.enabled) return feetDistance <= stopDistance;
+        return feet.Distance(playerFeet).distance <= attackReach;
     }
 
     // Le squelette est fait de plusieurs sprites : on le retourne via l'echelle X, pas via flipX.
@@ -107,17 +135,19 @@ public class EnemyAI : MonoBehaviour
         if (animator != null) animator.SetFloat("Speed", speed);
     }
 
-    // Appele tant que le joueur touche le squelette
-    void OnCollisionStay2D(Collision2D collision)
+    void TryAttack()
     {
-        if (!collision.gameObject.CompareTag("Player") || Time.time < nextDamageTime) return;
+        if (playerStats == null || Time.time < nextDamageTime) return;
 
-        PlayerStats stats = collision.gameObject.GetComponent<PlayerStats>();
-        if (stats == null) return;
-
-        stats.TakeDamage(touchDamage);
+        playerStats.TakeDamage(touchDamage);
         nextDamageTime = Time.time + damageCooldown;
 
         if (animator != null) animator.SetTrigger("Attack");
+    }
+
+    // Le joueur peut aussi foncer dans l'ennemi : meme regle que la portee
+    void OnCollisionStay2D(Collision2D collision)
+    {
+        if (collision.gameObject.CompareTag("Player")) TryAttack();
     }
 }

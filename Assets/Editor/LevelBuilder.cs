@@ -57,11 +57,15 @@ public static class LevelBuilder
         public float EnemySpeed;
         public float DetectionRange;
         public float DamageCooldown;
+        public string EnemyPrefab; // vide = on clone le squelette de Room1
+        public string BossPrefab;  // vide = pas de boss
+        public int PlayerHealth;   // 0 = PV du joueur de Room1
+        public int PlayerDamage;   // 0 = degats du joueur de Room1
         public Theme Biome;
         public int Seed;
     }
 
-    // Progression de difficulte. Niveau 1 (Room1) = 1 squelette, 5 PV, 1 degat, vitesse 2.
+    // Progression de difficulte. Niveau 1 (Room1) = 3 squelettes, 5 PV, 1 degat, vitesse 2.
     static readonly LevelSpec[] Specs =
     {
         new LevelSpec
@@ -70,7 +74,9 @@ public static class LevelBuilder
             Width = 24, Height = 14, Seed = 1202,
             // Niveau 2 = jardin en ruines : herbe fleurie, allee pavee, muret central.
             Biome = Theme.Garden,
-            EnemyCount = 3,
+            // Les squelettes de Room1 sont remplaces par des gobelins (pack Dark Fantasy).
+            EnemyPrefab = "Assets/Prefabs/Enemy_Goblin.prefab",
+            EnemyCount = 5,
             // Le joueur fait 2 PV/s et reste IMMOBILE pendant qu'il frappe (ForceStop).
             // D'ou : PV bas (temps immobile court) et 1 degat, car les degats de contact
             // s'ADDITIONNENT quand plusieurs squelettes te touchent en meme temps.
@@ -84,6 +90,10 @@ public static class LevelBuilder
             Width = 30, Height = 20, Seed = 1303,
             // Niveau 3 = crypte : dalles froides, piliers, tombes et sarcophages.
             Biome = Theme.Crypt,
+            // Le Chevalier Noir garde l'allee, juste avant l'autel.
+            BossPrefab = "Assets/Prefabs/Boss_DarkKnight.prefab",
+            // plus de vie et de degats pour tenir face au boss
+            PlayerHealth = 30, PlayerDamage = 3,
             EnemyCount = 5,
             // Plus dur que Room2 par le NOMBRE, la VITESSE et l'agro — pas par les
             // degats bruts : 5 squelettes a 2 degats tuent avant la fin du menage.
@@ -206,6 +216,17 @@ public static class LevelBuilder
         PlayerStats playerStats = Object.FindObjectOfType<PlayerStats>();
         if (playerStats == null) { Debug.LogError("[LevelBuilder] Pas de Player dans " + dest); return false; }
         GameObject player = playerStats.gameObject;
+        if (spec.PlayerHealth > 0)
+        {
+            playerStats.maxHealth = spec.PlayerHealth;
+            EditorUtility.SetDirty(playerStats);
+        }
+        PlayerCombat playerCombat = player.GetComponent<PlayerCombat>();
+        if (spec.PlayerDamage > 0 && playerCombat != null)
+        {
+            playerCombat.attackDamage = spec.PlayerDamage;
+            EditorUtility.SetDirty(playerCombat);
+        }
 
         // --- tilemaps : celle avec collider = murs, l'autre = sol ---
         Tilemap[] maps = Object.FindObjectsOfType<Tilemap>();
@@ -221,6 +242,16 @@ public static class LevelBuilder
         Transform altarRoot = altar.transform.root;
         Transform enemyRoot = template.transform.root;
         RemoveSourceDecor(scene, player.transform.root, altarRoot, enemyRoot);
+
+        // Room1 a plusieurs squelettes : on n'en garde qu'un comme modele, les clones viennent ensuite
+        foreach (EnemyStats other in Object.FindObjectsOfType<EnemyStats>())
+            if (other.transform.root != enemyRoot) Object.DestroyImmediate(other.transform.root.gameObject);
+
+        if (!string.IsNullOrEmpty(spec.EnemyPrefab))
+        {
+            enemyRoot = SwapEnemy(scene, enemyRoot, spec.EnemyPrefab);
+            if (enemyRoot == null) return false;
+        }
 
         Room room = new Room
         {
@@ -277,10 +308,14 @@ public static class LevelBuilder
         if (spec.Biome == Theme.Garden) DecorateGarden(room);
         else DecorateCrypt(room);
 
+        // le boss d'abord : sa zone est reservee avant de placer les squelettes
+        Vector3Int bossCell = new Vector3Int(room.Altar.x - 1, room.H / 2, 0);
+        if (!string.IsNullOrEmpty(spec.BossPrefab)) Reserve(room, bossCell, 2);
+
         List<Vector3Int> spots = PickEnemyCells(room);
         if (spots.Count < spec.EnemyCount)
         {
-            Debug.LogError("[LevelBuilder] Pas assez de place pour " + spec.EnemyCount + " squelettes dans " + dest);
+            Debug.LogError("[LevelBuilder] Pas assez de place pour " + spec.EnemyCount + " ennemis dans " + dest);
             return false;
         }
 
@@ -294,6 +329,12 @@ public static class LevelBuilder
             PlaceEnemy(room, clone.transform, spots[i]);
         }
 
+        if (!string.IsNullOrEmpty(spec.BossPrefab))
+        {
+            if (!PlaceBoss(room, scene, spec.BossPrefab, bossCell)) return false;
+            altar.totalEnemies = spec.EnemyCount + 1; // le boss compte pour l'autel
+        }
+
         if (spec.Biome == Theme.Garden) ScatterGarden(room);
         else ScatterCrypt(room);
 
@@ -302,7 +343,7 @@ public static class LevelBuilder
         if (!saved) { Debug.LogError("[LevelBuilder] SaveScene a echoue pour " + dest); return false; }
 
         Debug.Log(string.Format(
-            "[LevelBuilder] {0} ({1}) : salle {2}x{3}, {4} squelettes ({5} PV, {6} degats, vitesse {7}), {8} elements de decor, autel -> {9}",
+            "[LevelBuilder] {0} ({1}) : salle {2}x{3}, {4} ennemis ({5} PV, {6} degats, vitesse {7}), {8} elements de decor, autel -> {9}",
             spec.SceneName, spec.Biome, spec.Width, spec.Height, spec.EnemyCount,
             spec.EnemyHealth, spec.EnemyDamage, spec.EnemySpeed, room.Decor.childCount, spec.NextScene));
         return true;
@@ -911,6 +952,37 @@ public static class LevelBuilder
         Reserve(r, cell, 1);
     }
 
+    /// <summary>Remplace le squelette copie de Room1 par un autre ennemi (meme position).</summary>
+    static Transform SwapEnemy(Scene scene, Transform skeleton, string prefabPath)
+    {
+        GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+        if (prefab == null)
+        {
+            Debug.LogError("[LevelBuilder] Prefab d'ennemi introuvable : " + prefabPath);
+            return null;
+        }
+
+        GameObject enemy = (GameObject)PrefabUtility.InstantiatePrefab(prefab, scene);
+        enemy.transform.position = skeleton.position;
+        Object.DestroyImmediate(skeleton.gameObject);
+        return enemy.transform;
+    }
+
+    /// <summary>Boss pose sur l'allee ; ses stats viennent de son prefab, pas de la LevelSpec.</summary>
+    static bool PlaceBoss(Room r, Scene scene, string prefabPath, Vector3Int cell)
+    {
+        GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+        if (prefab == null)
+        {
+            Debug.LogError("[LevelBuilder] Prefab du boss introuvable : " + prefabPath);
+            return false;
+        }
+
+        GameObject boss = (GameObject)PrefabUtility.InstantiatePrefab(prefab, scene);
+        boss.transform.position = CellFoot(r, cell, 0.2f); // pivot du boss = ses pieds
+        return true;
+    }
+
     static void ApplyDifficulty(GameObject enemy, LevelSpec spec)
     {
         EnemyStats stats = enemy.GetComponent<EnemyStats>();
@@ -999,16 +1071,16 @@ public static class LevelBuilder
         panel.transform.SetSiblingIndex(afterBackground);
         RectTransform panelRect = (RectTransform)panel.transform;
         panelRect.anchoredPosition = new Vector2(0f, 120f);
-        panelRect.sizeDelta = new Vector2(980f, 300f);
+        panelRect.sizeDelta = new Vector2(1150f, 300f); // assez large pour "CONGRATULATIONS!"
         panel.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.45f);
 
         Color gold = new Color(1f, 0.82f, 0.25f, 1f);
-        CreateText(canvas.transform, "TitleShadow", "FÉLICITATIONS !", font, 96, new Color(0.25f, 0.12f, 0f, 0.9f),
+        CreateText(canvas.transform, "TitleShadow", "CONGRATULATIONS!", font, 96, new Color(0.25f, 0.12f, 0f, 0.9f),
                    new Vector2(5f, 165f), new Vector2(1200f, 130f), FontStyles.Bold);
-        CreateText(canvas.transform, "Title", "FÉLICITATIONS !", font, 96, gold,
+        CreateText(canvas.transform, "Title", "CONGRATULATIONS!", font, 96, gold,
                    new Vector2(0f, 170f), new Vector2(1200f, 130f), FontStyles.Bold);
         CreateText(canvas.transform, "Subtitle",
-                   "Tu as terminé les 3 niveaux !\nLes squelettes sont vaincus, le royaume est sauvé.",
+                   "You completed all 3 levels!\nThe Dark Knight is defeated and the kingdom is saved.",
                    font, 34, Color.white, new Vector2(0f, 45f), new Vector2(1100f, 120f), FontStyles.Normal);
 
         EditorSceneManager.MarkSceneDirty(scene);

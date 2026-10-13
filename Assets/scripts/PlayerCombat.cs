@@ -8,7 +8,7 @@ using UnityEngine;
 public class PlayerCombat : MonoBehaviour
 {
     [Header("Combat")]
-    public int attackDamage = 1;
+    public int attackDamage = 2;
     public float attackRange = 1.5f;
     public LayerMask enemyLayer;
     public float attackCooldown = 0.5f; // temps minimum entre deux coups

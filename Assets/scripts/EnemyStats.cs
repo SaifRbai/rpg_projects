@@ -84,7 +84,8 @@ public class EnemyStats : MonoBehaviour
         if (altar != null) altar.RegisterEnemyDefeat();
 
         // 3. animation de mort ; Speed = 0 pour ne pas rester bloque dans l'etat Marche
-        Animator anim = GetComponent<Animator>();
+        // InChildren : l'Animator du boss est sur un enfant ("Root"), pas sur la racine
+        Animator anim = GetComponentInChildren<Animator>();
         if (anim != null)
         {
             anim.SetFloat("Speed", 0f);
