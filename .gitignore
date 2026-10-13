@@ -1,0 +1,39 @@
+# Unity : dossiers regeneres automatiquement (ne pas partager)
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+
+# Fichiers de l'IDE (Visual Studio / Rider / VS Code), regeneres par Unity
+.vs/
+.vscode/
+.idea/
+*.csproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+UpgradeLog.htm
+
+# Fichiers temporaires / plantages
+*.blob
+*.tmp
+crashlytics-build.properties
+_scene_backups/
+.claude/
+
+# Systeme
+.DS_Store
+Thumbs.db
